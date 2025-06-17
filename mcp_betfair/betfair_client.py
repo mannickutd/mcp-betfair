@@ -24,8 +24,9 @@ class BetfairEvent(BaseModel):
 
 
 class BetfairMarketCatalogue(BaseModel):
-    market_id: Annotated[int, Field(alias='marketId')]
+    market_id: Annotated[str, Field(alias='marketId')]
     market_name: Annotated[str, Field(alias='marketName')]
+    total_matched: Annotated[float, Field(alias='totalMatched', default=0.0)]
 
 
 class BetfairMarketType(BaseModel):
@@ -309,7 +310,7 @@ class BetfairClient:
         if len(retval) == 1:
             retval = retval[0]  # Unwrap the single item response
         if "result" in retval:
-            retval = [BetfairEvent(**item['event']) for item in retval["result"]]
+            retval = [BetfairMarketCatalogue(**item) for item in retval["result"]]
         else:
             retval = []
         return retval

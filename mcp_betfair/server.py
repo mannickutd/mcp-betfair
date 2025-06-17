@@ -44,7 +44,7 @@ async def lifespan(_app: fastapi.FastAPI):
 
 
 agent = Agent(
-    'google-gla:gemini-1.5-flash',
+    'google-gla:gemini-2.0-flash',
     system_prompt=(
         "You're an aggressive bookmaker, you're keen to take bets on any sporting event. "
         "You have access to the Betfair API, which allows you to retrieve market data. "
