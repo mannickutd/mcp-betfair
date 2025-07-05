@@ -3,6 +3,8 @@ from typing import Optional, List
 import os
 import dotenv
 from pydantic_ai import (Agent, RunContext)
+from starlette.responses import RedirectResponse
+from mem0 import AsyncMemoryClient
 from mcp_betfair.betfair_client import BetfairClient
 from mcp_betfair.database import Database
 import json
@@ -15,7 +17,6 @@ import logfire
 from fastapi import Depends, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from typing_extensions import TypedDict
-
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import (
     ModelMessage,
@@ -39,8 +40,9 @@ THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 @asynccontextmanager
 async def lifespan(_app: fastapi.FastAPI):
+    client = AsyncMemoryClient(host="http://localhost:8888", api_key="not-needed")
     async with Database.connect() as db:
-        yield {'db': db}
+        yield {'db': db, 'memory': client}
 
 
 agent = Agent(
@@ -194,8 +196,17 @@ def list_market_book_selections(
     )
 
 
+@app.get('/start/')
+async def start_page() -> FileResponse:
+    return FileResponse((os.path.join(THIS_DIR, '../public/start.html')), media_type='text/html')
+
 
 @app.get('/')
+async def index() -> RedirectResponse:
+    return RedirectResponse(url='/start/')
+
+
+@app.get('/chat')
 async def index() -> FileResponse:
     return FileResponse((os.path.join(THIS_DIR, '../public/chat_app.html')), media_type='text/html')
 
@@ -210,9 +221,19 @@ async def get_db(request: Request) -> Database:
     return request.state.db
 
 
-@app.get('/chat/')
-async def get_chat(database: Database = Depends(get_db)) -> Response:
-    msgs = await database.get_messages()
+async def get_memory_store(request: Request) -> AsyncMemoryClient:
+    return request.state.memory
+
+
+@app.get('/chat-messages/')
+async def get_chat(
+    username: str,
+    session_id: str,
+    database: Database = Depends(get_db),
+    memory_store = Depends(get_memory_store),
+) -> Response:
+    msgs = await database.get_messages(username, session_id)
+    memories = await memory_store.get_all(user_id=username)
     return Response(
         b'\n'.join(json.dumps(to_chat_message(m)).encode('utf-8') for m in msgs),
         media_type='text/plain',
@@ -247,13 +268,14 @@ def to_chat_message(m: ModelMessage) -> ChatMessage:
     raise UnexpectedModelBehavior(f'Unexpected message type for chat app: {m}')
 
 
-@app.post('/chat/')
+@app.post('/chat-messages/')
 async def post_chat(
-    prompt: Annotated[str, fastapi.Form()], database: Database = Depends(get_db)
+    username: Annotated[str, fastapi.Form()],
+    session_id: Annotated[str, fastapi.Form()],
+    prompt: Annotated[str, fastapi.Form()],
+    database: Database = Depends(get_db),
 ) -> StreamingResponse:
     async def stream_messages():
-        """Streams new line delimited JSON `Message`s to the client."""
-        # stream the user prompt so that can be displayed straight away
         yield (
             json.dumps(
                 {
@@ -264,17 +286,12 @@ async def post_chat(
             ).encode('utf-8')
             + b'\n'
         )
-        # get the chat history so far to pass as context to the agent
-        messages = await database.get_messages()
-        # run the agent with the user prompt and the chat history
+        messages = await database.get_messages(username, session_id)
         async with agent.run_stream(prompt, message_history=messages) as result:
             async for text in result.stream(debounce_by=0.01):
-                # text here is a `str` and the frontend wants
-                # JSON encoded ModelResponse, so we create one
                 m = ModelResponse(parts=[TextPart(text)], timestamp=result.timestamp())
                 yield json.dumps(to_chat_message(m)).encode('utf-8') + b'\n'
 
-        # add new messages (e.g. the user prompt and the agent response in this case) to the database
-        await database.add_messages(result.new_messages_json())
+        await database.add_messages(username, session_id, result.new_messages_json())
 
     return StreamingResponse(stream_messages(), media_type='text/plain')

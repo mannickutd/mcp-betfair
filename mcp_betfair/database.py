@@ -59,23 +59,34 @@ class Database:
         con = logfire.instrument_sqlite3(con)
         cur = con.cursor()
         cur.execute(
-            'CREATE TABLE IF NOT EXISTS messages (id INT PRIMARY KEY, message_list TEXT);'
+            '''
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                message_list TEXT NOT NULL
+            );
+            '''
         )
         con.commit()
         return con
 
-    async def add_messages(self, messages: bytes):
+    async def add_messages(self, username: str, session_id: str, messages: bytes):
         await self._asyncify(
             self._execute,
-            'INSERT INTO messages (message_list) VALUES (?);',
+            'INSERT INTO messages (username, session_id, message_list) VALUES (?, ?, ?);',
+            username,
+            session_id,
             messages,
             commit=True,
         )
-        await self._asyncify(self.con.commit)
 
-    async def get_messages(self) -> list[ModelMessage]:
+    async def get_messages(self, username: str, session_id: str) -> list[ModelMessage]:
         c = await self._asyncify(
-            self._execute, 'SELECT message_list FROM messages order by id'
+            self._execute,
+            'SELECT message_list FROM messages WHERE username = ? AND session_id = ? ORDER BY id;',
+            username,
+            session_id
         )
         rows = await self._asyncify(c.fetchall)
         messages: list[ModelMessage] = []

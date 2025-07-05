@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.3.0
+    container_name: qdrant
+    networks:
+      - mem0_network
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    networks:
+      - mem0_network
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/ollama/storage
+      - ./ollama_entrypoint.sh:/ollama_entrypoint.sh
+    entrypoint: ["/usr/bin/bash", "/ollama_entrypoint.sh"]
+    restart: unless-stopped
+
+  neo4j:
+    image: neo4j:5.26.4
+    networks:
+      - mem0_network
+    healthcheck:
+      test: wget http://localhost:7687 || exit 1
+      interval: 1s
+      timeout: 10s
+      retries: 20
+      start_period: 3s
+    ports:
+      - "8474:7474" # HTTP
+      - "8687:7687" # Bolt
+    volumes:
+      - neo4j_data:/data
+    environment:
+      - NEO4J_AUTH=neo4j/mem0graph
+      - NEO4J_PLUGINS=["apoc"]  # Add this line to install APOC
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_apoc_import_file_use__neo4j__config=true
+
+  mem0:
+    image: memory_app:latest
+    ports:
+      - "8888:8000"
+    networks:
+      - mem0_network
+    volumes:
+      - ./history:/app/history      # History db location. By default, it creates a history.db file on the server folder
+      - .:/app                      # Server code. This allows to reload the app when the server code is updated
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    command: uvicorn server:app --host 0.0.0.0 --port 8000 --reload  # Enable auto-reload
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1  # Prevents Python from writing .pyc files
+      - PYTHONUNBUFFERED=1  # Ensures Python output is sent straight to terminal
+
+volumes:
+  neo4j_data:
+  qdrant_data:
+  ollama_data:
+
+networks:
+  mem0_network:
+    driver: bridge
