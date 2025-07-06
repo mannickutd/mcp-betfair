@@ -15,3 +15,19 @@ Mem0 provides a REST API server (written using FastAPI). Users can perform all o
 ## Running the server
 
 Follow the instructions in the [docs](https://docs.mem0.ai/open-source/features/rest-api) to run the server.
+
+## First start up
+
+The first time ollama docker file starts up it needs to download the models used by the mem0 server.
+The mem0 may need to be restarted after the models are finished downloaded.
+
+We also need to create the database on the qdrant server. To create a database run the following command:
+
+```bash
+curl -X PUT "http://localhost:6333/collections/test" -H "accept: application/json" -H "Content-Type: application/json" -d '{"vectors":{"size":768,"distance":"Cosine"}}'
+```
+
+To list the collections
+```bash
+curl -X GET "http://localhost:6333/collections" -H "accept: application/json"
+```

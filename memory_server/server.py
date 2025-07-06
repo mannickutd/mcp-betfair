@@ -22,7 +22,7 @@ DEFAULT_CONFIG = {
     "vector_store": {
         "provider": "qdrant",
         "config": {
-            "collection_name": "test",
+            "collection_name": "memories",
             "host": "qdrant",
             "port": 6333,
             "embedding_model_dims": 768,
@@ -208,6 +208,7 @@ def reset_memory():
 def home():
     """Redirect to the OpenAPI documentation."""
     return RedirectResponse(url="/docs")
+
 
 @app.get("/v1/ping", summary="Ping the server")
 def ping():

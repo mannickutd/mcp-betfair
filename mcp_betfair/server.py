@@ -195,6 +195,29 @@ def list_market_book_selections(
         market_ids=market_ids,
     )
 
+@agent.tool
+def search_memories(
+    ctx: RunContext[str],
+    user_id: str,
+    query: str,
+):
+    """
+    Search a users previous chats with the agent.
+    The memories are all the previous interactions the user has had with the agent.
+    This might be useful to add a bit of context to the conversation, or to
+    avoid repeating the same question multiple times.
+
+    This tool allows you to search for memories stored in the memory store.
+    It returns a list of memories that match the query.
+
+    :param user_id: The ID of the user whose memories are being searched.
+    :param session_id: The ID of the session for which memories are being searched.
+    :param query: The query string to search for in the memories.
+    :return: A list of memories that match the query.
+    """
+    memory_client = AsyncMemoryClient(host="http://localhost:8888", api_key="not-needed")
+    return memory_client.search(user_id=user_id, query=query)
+
 
 @app.get('/start/')
 async def start_page() -> FileResponse:
@@ -230,10 +253,10 @@ async def get_chat(
     username: str,
     session_id: str,
     database: Database = Depends(get_db),
-    memory_store = Depends(get_memory_store),
+    memory_store: AsyncMemoryClient = Depends(get_memory_store),
 ) -> Response:
     msgs = await database.get_messages(username, session_id)
-    memories = await memory_store.get_all(user_id=username)
+    memories = await memory_store.get_all(user_id=username, run_id=session_id)
     return Response(
         b'\n'.join(json.dumps(to_chat_message(m)).encode('utf-8') for m in msgs),
         media_type='text/plain',
@@ -268,12 +291,35 @@ def to_chat_message(m: ModelMessage) -> ChatMessage:
     raise UnexpectedModelBehavior(f'Unexpected message type for chat app: {m}')
 
 
+def convert_pydantic_to_chat_message(
+    pydantic_msg: ModelMessage,
+) -> List[ChatMessage]:
+    """Convert a Pydantic message to a chat message format."""
+    format_memories = []
+    if isinstance(pydantic_msg, ModelRequest):
+        for part in pydantic_msg.parts:
+            if isinstance(part, UserPromptPart):
+                format_memories.append({
+                    'role': 'user',
+                    'content': part.content,
+                })
+    elif isinstance(pydantic_msg, ModelResponse):
+        for part in pydantic_msg.parts:
+            if isinstance(part, TextPart):
+                format_memories.append({
+                    'role': 'model',
+                    'content': part.content,
+                })
+    return []
+
+
 @app.post('/chat-messages/')
 async def post_chat(
     username: Annotated[str, fastapi.Form()],
     session_id: Annotated[str, fastapi.Form()],
     prompt: Annotated[str, fastapi.Form()],
     database: Database = Depends(get_db),
+    memory_store: AsyncMemoryClient = Depends(get_memory_store),
 ) -> StreamingResponse:
     async def stream_messages():
         yield (
@@ -293,5 +339,16 @@ async def post_chat(
                 yield json.dumps(to_chat_message(m)).encode('utf-8') + b'\n'
 
         await database.add_messages(username, session_id, result.new_messages_json())
+        format_memories = []
+        for m in result.new_messages():
+            converted = convert_pydantic_to_chat_message(m)
+            if converted:
+                format_memories.extend(converted)
+        if format_memories:
+            await memory_store.add(
+                messages=format_memories,
+                user_id=username,
+                run_id=session_id,
+            )
 
     return StreamingResponse(stream_messages(), media_type='text/plain')
